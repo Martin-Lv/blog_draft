@@ -17,7 +17,7 @@ TableCell *cell = [tableView dequeueReusableCellWithIdentifier:@"TableCell"];
 return cell;
 ```
 
-这样就不需要
+dequeueReusableCellWithIdentifier方法会在取不出cell的时候自动由nib创建一个新的cell，这样就不需要
 
 ```
 if (cell == nil){
