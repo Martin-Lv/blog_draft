@@ -17,7 +17,7 @@
 获取文档目录的代码如下：
 
 ```
-NSString *destPath ＝ [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) lastObject];
+NSString *destPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) lastObject];
 destPath = [destPath stringByAppendingPathComponent:@"userData.plist"];
 ```
         
