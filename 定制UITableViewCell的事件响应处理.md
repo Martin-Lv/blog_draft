@@ -64,11 +64,11 @@ typedef void(^OnMyButtonClick)(NSIndexPath *indexPath);
 
 	MyUITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:CellIdentifier forIndexPath:indexPath];
 	if(cell){
-	    __weak typeof(self) weakSelf = self;
-	    cell.tableView = tableView;
-	    cell.onMyButtonClick = ^(NSIndexPath *indexPath){
-	        [weakSelf onMyButtonClick:indexPath];
-	    }
+		__weak typeof(self) weakSelf = self;
+		cell.tableView = tableView;
+		cell.onMyButtonClick = ^(NSIndexPath *indexPath){
+			[weakSelf onMyButtonClick:indexPath];
+		}
 	}
 	return cell;
 }
