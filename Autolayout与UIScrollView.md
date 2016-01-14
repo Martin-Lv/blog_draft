@@ -1,0 +1,8 @@
+#Autolayout与UIScrollView
+
+UIScrollView需要根据其subview的大小来确定自身contentSize的大小，而使用autolayout时，subView确定与UIScrollView的布局关系，需要contentSize。这就造成了循环依赖。
+
+解决方案就是使subView的长和宽不依赖于UIScrollView，然后再确定subView与UIScrollView的位置关系即可。
+
+
+
