@@ -1,6 +1,5 @@
 #如何减少应用crash
 
-一个原则：依赖简单的，不会出错的代码。代码逻辑越复杂越可能出问题。
 
 ##代码中可能导致crash的情况
 
@@ -93,6 +92,33 @@ let n = UInt(a) //a = -1
 
 ##修复crash的技巧
 
+在xcode中调试iOS app时，程序crash有时不会断在导致crash的代码处，而是断在main函数中，无从知道是哪一句代码导致了crash。
+
+针对某些特定的crash原因，有一些办法可以定位到导致crash的代码。
+
+###使用NSZombie解决 EXC\_BAD\_ACCESS 或 SIGABORT
+
+点击procuct -> scheme -> edit scheme -> 在 run 的 arguments 选项卡中添加一个 environment Variables，并设为 YES：
+
+`NSZombieEnabled`
+
+启动这个环境变量后，对象应该被释放时不会真的被释放，而是被标记为一个Zombie对象。这样就能知道是向哪个已释放的对象发送消息导致了crash。控制台会打出类似这样的消息：
+
+```
+ -[NSArray addObject:]: message sent to deallocated instance 0x7179910
+
+```
+
+提示向已经释放的对象发送消息，这样就容易找到出问题的地方。
+
+注意调试完毕后需要把这个环境变量设为NO，因为开启会导致对象不被释放，内存占用会一直增长。
+
+###解决uncaught exception
+
+如果程序崩溃时提示uncaught exception，可以加一个全局的异常断点。这样当程序抛出没有被捕获的异常时程序就会断掉。
+
+在左侧栏的断点一栏中，点击左下角的“+”号，选择exception breakpoint即可。另外可以设置断点在异常抛出时还是异常被捕获时，以及针对Objective-C 异常还是C++异常。
+
 ###用Xcode UI Test代替手工来自动测试，发现crash
 
 用UI Test录制各种操作路径，在不同的手机上重复跑测试，尽量让潜在的crash出现
@@ -104,4 +130,4 @@ let n = UInt(a) //a = -1
 
 每个版本修复crash工作尽量放在开发周期的前期，测试通过后千万不能再做“看上去不会出问题”的修改。
 
-重构，写新功能，改bug，一次只做一件事。同时进行思路很容易乱掉，引入新的bug。
+写新功能，重构，优化，改bug，一次只做一件事。同时进行很容易思路乱掉顾此失彼，引入新的bug。
