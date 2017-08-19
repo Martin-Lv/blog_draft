@@ -1,184 +1,109 @@
-#构造异步NSOperation实现异步操作的线程同步
+#构造异步NSOperation，实现异步任务的线程同步
 
-在多线程编程时，NSOperationQueue是线程同步的利器。
+题目有点绕，所谓异步任务的线程同步，就是控制多个异步任务的执行顺序。
 
-一个简单的场景：某个类内部不是线程安全的，同一时刻只能有一个线程操作这个类。
+一个常见的场景：一个任务依赖多个异步任务，必须在几个任务都收到了完成回调以后再执行。
 
-我们可以将相关的方法调用放在串行NSOpeartionQueue中，即可实现串行执行。
+如果换成同步任务，解决方案何其简单。可以用`dispatch_group`，更方便的是用`NSOperation`的`addDependency`功能，让最后执行的任务依赖前面几个任务即可。
 
-写一个简单的类来模拟一下：
+我们知道，`NSOperation`内部维护了一个状态机来表示内部任务的执行状态。一共有下面几个状态：
+
+- ready
+- executing
+- finished
+- cancelled
+
+如果我们用`addDependency`给两个`NSOperation`设置了依赖关系，那么一个`NSOperation`对应的方法或block执行完毕后，会变为finished状态，这时另一个`NSOperation`才会执行。
+
+如果我们能让异步任务表现得像同步任务一样，在异步任务收到回调后才变为`finished`状态，不就可以用`addDependency`来控制异步任务的执行顺序了吗？
+
+事实上苹果在`NSOperation`的接口里给我们留了一个口子。看`NSOperation`的接口：
 
 ```
-class TestClass {
-    func method1(){
-        print("method 1 begin")
-        for _ in 0 ... 100000 {
-            continue
-        }
-        print("method 1 end")
-    }
-    
-    func method2(){
-        print("method 2 begin")
-        for _ in 0 ... 100000 {
-            continue
-        }
-        print("method 2 end")
-    }
+NS_CLASS_AVAILABLE(10_5, 2_0)
+@interface NSOperation : NSObject {
+@private
+    id _private;
+    int32_t _private1;
+#if __LP64__
+    int32_t _private1b;
+#endif
 }
 
-```
-测试代码：
+- (void)start;
+- (void)main;
 
-```
-let operationQueue = NSOperationQueue()
-operationQueue.maxConcurrentOperationCount = 1
+@property (readonly, getter=isCancelled) BOOL cancelled;
+- (void)cancel;
 
-operationQueue.addOperationWithBlock { () -> Void in
-    unsafeObject.method1()
-}
-operationQueue.addOperationWithBlock { () -> Void in
-    unsafeObject.method2()
-}
+@property (readonly, getter=isExecuting) BOOL executing;
+@property (readonly, getter=isFinished) BOOL finished;
+@property (readonly, getter=isConcurrent) BOOL concurrent; // To be deprecated; use and override 'asynchronous' below
+@property (readonly, getter=isAsynchronous) BOOL asynchronous NS_AVAILABLE(10_8, 7_0);
+@property (readonly, getter=isReady) BOOL ready;
 
-let runloop = NSRunLoop.currentRunLoop()
-while runloop.runMode(NSDefaultRunLoopMode, beforeDate: NSDate.distantFuture()){
-    continue
-}
+- (void)addDependency:(NSOperation *)op;
+- (void)removeDependency:(NSOperation *)op;
 
-```
+@property (readonly, copy) NSArray<NSOperation *> *dependencies;
 
-由于测试工程是一个command line tool，我用runloop阻塞住了主线程，避免主线程执行完之后整个程序退出，`operationQueue`中的代码来不及执行。
+typedef NS_ENUM(NSInteger, NSOperationQueuePriority) {
+	NSOperationQueuePriorityVeryLow = -8L,
+	NSOperationQueuePriorityLow = -4L,
+	NSOperationQueuePriorityNormal = 0,
+	NSOperationQueuePriorityHigh = 4,
+	NSOperationQueuePriorityVeryHigh = 8
+};
 
-输出结果如下：
+@property NSOperationQueuePriority queuePriority;
 
-```
-method 1 begin
-method 1 end
-method 2 begin
-method 2 end
-```
+@property (nullable, copy) void (^completionBlock)(void) NS_AVAILABLE(10_6, 4_0);
 
-可以看到，两个方法严格地顺序执行。
+- (void)waitUntilFinished NS_AVAILABLE(10_6, 4_0);
 
-但如果我们调用的接口是异步的，在NSBlockOperation中调用后就会马上返回，无法做到线程同步。
+@property double threadPriority NS_DEPRECATED(10_6, 10_10, 4_0, 8_0);
 
-给`TestClass`增加一个异步方法：
+@property NSQualityOfService qualityOfService NS_AVAILABLE(10_10, 8_0);
 
-```
-let queue = dispatch_queue_create("UnsafeClass_background_queue", DISPATCH_QUEUE_CONCURRENT)
+@property (nullable, copy) NSString *name NS_AVAILABLE(10_10, 8_0);
 
-func asyncMethod(done:()->Void){
-    print("async method begin")
-    dispatch_async(queue) { () -> Void in
-        for _ in 0 ... 100000 {
-            continue
-        }
-        print("async method end")
-        done()
-    }
-    return
-}
+@end
 ```
 
-测试代码中增加异步方法的调用：
+我们需要重点关注的是`asynchronous`属性。如果它值为`true`，那么这个`NSOperation`执行完毕后不会自动变为finished状态，需要手动设置。这正是我们想要的。
 
-```
-operationQueue.addOperationWithBlock { () -> Void in
-    object.method1()
-}
-operationQueue.addOperationWithBlock({ () -> Void in
-    object.asyncMethod({ () -> Void in
-    })
-})
-operationQueue.addOperationWithBlock { () -> Void in
-    object.method2()
-}
-```
+我们可以写一个`NSOperation`的子类，给异步任务提供一个设为finished状态的接口。
 
-程序输出如下：
-
-```
-method 1 begin
-method 1 end
-async method begin
-method 2 begin
-async method end
-method 2 end
-```
-
-可以看到`method2()`和`asyncMethod()`是并发执行的。这是很自然的，我们添加的第二个NSOperation在执行完`asyncMethod()`的调用后就返回了，不会等它dispatch到其他dispatch queue的代码执行完毕。
-
-那么，怎样做到让异步方法也顺序执行呢？我们先了解一下NSOperationQueue是怎样调度NSOperation的。
-
-##NSOperation的生命周期
-
-##构造异步NSOperation
-
-
-其实苹果在设计`NSOperation`时也考虑到了这一点，我们需要创建一个异步的`NSOperation`子类。
-
-先看看`NSOperation`的接口：
-
-```
-/*	NSOperation.h
-	Copyright (c) 2006-2015, Apple Inc. All rights reserved.
-*/
-
-@available(iOS 2.0, *)
-public class NSOperation : NSObject {
-    
-    public func start()
-    public func main()
-    
-    public var cancelled: Bool { get }
-    public func cancel()
-    
-    public var executing: Bool { get }
-    public var finished: Bool { get }
-    public var concurrent: Bool { get } // To be deprecated; use and override 'asynchronous' below
-    @available(iOS 7.0, *)
-    public var asynchronous: Bool { get }
-    public var ready: Bool { get }
-    
-    public func addDependency(op: NSOperation)
-    public func removeDependency(op: NSOperation)
-    
-    public var dependencies: [NSOperation] { get }
-    
-    public var queuePriority: NSOperationQueuePriority
-    
-    @available(iOS 4.0, *)
-    public var completionBlock: (() -> Void)?
-    
-    @available(iOS 4.0, *)
-    public func waitUntilFinished()
-    
-    @available(iOS, introduced=4.0, deprecated=8.0)
-    public var threadPriority: Double
-    
-    @available(iOS 8.0, *)
-    public var qualityOfService: NSQualityOfService
-    
-    @available(iOS 8.0, *)
-    public var name: String?
-}
-
-```
-
-我们需要重载几个property：
-
+上代码：
 
 ```
 typealias MLAsyncOperationBlock = (operation:MLAsyncOperation)->Void
 
 class MLAsyncOperation: NSOperation {
-    private var ml_executing = false
-    private var ml_finished = false
+    private var ml_executing = false{
+        willSet {
+            willChangeValueForKey("isExecuting")
+        }
+        didSet {
+            didChangeValueForKey("isExecuting")
+        }
+    }
+    private var ml_finished = false{
+        willSet {
+            willChangeValueForKey("isFinished")
+        }
+        didSet {
+            didChangeValueForKey("isFinished")
+        }
+    }
     
     private var block:MLAsyncOperationBlock?
     
     override var asynchronous:Bool {
+        return true
+    }
+    
+    override var concurrent:Bool {
         return true
     }
     
@@ -190,18 +115,6 @@ class MLAsyncOperation: NSOperation {
         return ml_executing
     }
     
-    func ml_setFinished(finished:Bool){
-        willChangeValueForKey("isFinished")
-        ml_finished = finished
-        didChangeValueForKey("isFinished")
-    }
-    
-    func ml_setExecuting(executing:Bool){
-        willChangeValueForKey("isExecuting")
-        ml_executing = executing
-        didChangeValueForKey("isExecuting")
-    }
-    
     convenience init(operationBlock:MLAsyncOperationBlock) {
         self.init()
         block = operationBlock
@@ -209,16 +122,16 @@ class MLAsyncOperation: NSOperation {
     
     override func start() {
         if cancelled {
-            ml_setFinished(true)
+            ml_finished = true
             return
         }
-        ml_setExecuting(true)
+        ml_executing = true
         block?(operation: self)
     }
     
     func finishOperation(){
-        ml_setExecuting(false)
-        ml_setFinished(true)
+        ml_executing = false
+        ml_finished = true
     }
     
     deinit{
@@ -226,3 +139,119 @@ class MLAsyncOperation: NSOperation {
     }
 }
 ```
+几个需要说明的点：
+
+####一：
+
+`NSOperation`内部有一组成员变量来维护它的executing、finished这些状态，我们访问不到。但我们可以另外加一组成员变量，自己来维护这些状态。一个子类不一定要访问父类的成员变量，只要接口表现得和父类一样就行了。
+ 
+####二：
+ 
+`NSOperationQueue`是通过KVO观察内部的`NSOperation`状态的变化，来自动管理`NSOperation`的执行的。我们在设置自己的`ml_executing`属性的时候，需要表现得像`executing`属性被设置了一样。也就是需要调用一下`willChangeValueForKey("isExecuting")`和`didChangeValueForKey("isExecuting")`两个方法。利用Swift属性的willSet和didSet特性，可以非常方便地实现。
+ 
+finished属性同理。
+ 
+####三：
+
+`finishOperation`这个方法，是用户在收到异步回调，任务完成后需要调用的。调用后这个operation就会变为finished状态。为了方便，我给`MLAsyncOperationBlock`加了一个`MLAsyncOperation`类型的参数，在调用内部block的时候会把`self`传进去。这样用户在构造任务block的时候，通过这个参数就直接可以访问到operation本身了。
+ 
+来简单测试一下好不好用。
+
+先写一个类实现一个同步方法和两个异步方法：
+
+```
+class TestClass {
+    
+    let queue = dispatch_queue_create("TestClass_background_queue", DISPATCH_QUEUE_CONCURRENT)
+
+    func method1(){
+        print("method 1 begin")
+        for _ in 0 ... 100000 {
+            continue
+        }
+        print("method 1 end")
+    }
+    
+    func asyncMethod1(done:()->Void){
+        print("async method 1 begin")
+        dispatch_async(queue) { () -> Void in
+            for _ in 0 ... 100000 {
+                continue
+            }
+            print("async method 1 end")
+            done()
+        }
+        return
+    }
+    
+    func asyncMethod2(done:()->Void){
+        print("async method 2 begin")
+        dispatch_async(queue) { () -> Void in
+            for _ in 0 ... 100000 {
+                continue
+            }
+            print("async method 2 end")
+            done()
+        }
+        return
+    }
+}
+
+```
+测试代码：
+
+```
+let operationQueue = NSOperationQueue()
+operationQueue.maxConcurrentOperationCount = 5
+
+let object = TestClass()
+
+let op1 = NSBlockOperation { 
+    object.method1()
+}
+
+let asyncOp1 = MLAsyncOperation { (operation) in
+    object.asyncMethod1{ () -> Void in
+        operation.finishOperation()
+    }
+}
+
+let asyncOp2 = MLAsyncOperation { (operation) in
+    object.asyncMethod2{
+        operation.finishOperation()
+    }
+}
+
+op1.addDependency(asyncOp1)
+op1.addDependency(asyncOp2)
+
+operationQueue.addOperation(asyncOp1)
+operationQueue.addOperation(asyncOp2)
+operationQueue.addOperation(op1)
+
+let runloop = NSRunLoop.currentRunLoop()
+while runloop.runMode(NSDefaultRunLoopMode, beforeDate: NSDate.distantFuture()){
+    continue
+}
+
+```
+
+由于测试工程是一个command line tool，我用runloop阻塞住了主线程，避免主线程执行完之后整个程序退出，`operationQueue`中的代码来不及执行。
+
+跑一下，输出结果如下：
+
+```
+async method 1 begin
+async method 2 begin
+async method 1 end
+async method 2 end
+method 1 begin
+method 1 end
+```
+
+可以看到，两个异步方法并行执行，在两个方法都收到回调完成之后，最后一个方法开始执行。完美实现了我们的需求。
+
+完整的代码可以从[我的Github](https://github.com/Martin-Lv/asyncOperation)下载。
+
+
+
